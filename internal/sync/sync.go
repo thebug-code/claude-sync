@@ -175,14 +175,20 @@ func (s *Syncer) log(format string, args ...interface{}) {
 }
 
 func (s *Syncer) Push(ctx context.Context) (*SyncResult, error) {
-	result := &SyncResult{}
-
 	s.progress(ProgressEvent{Action: "scan", Path: "Detecting changes..."})
 
 	changes, err := s.state.DetectChanges(s.claudeDir, s.syncPaths(), s.isExcluded)
 	if err != nil {
 		return nil, fmt.Errorf("failed to detect changes: %w", err)
 	}
+	return s.pushChanges(ctx, changes, true)
+}
+
+// pushChanges uploads and deletes the given changes, then refreshes the remote
+// manifest and saves state. fullSync marks the global LastPush/LastSync times;
+// partial pushes (e.g. a single session) leave them untouched.
+func (s *Syncer) pushChanges(ctx context.Context, changes []FileChange, fullSync bool) (*SyncResult, error) {
+	result := &SyncResult{}
 
 	if len(changes) == 0 {
 		s.progress(ProgressEvent{Action: "scan", Complete: true})
@@ -270,8 +276,10 @@ func (s *Syncer) Push(ctx context.Context) (*SyncResult, error) {
 		}
 	}
 
-	s.state.LastPush = time.Now()
-	s.state.LastSync = time.Now()
+	if fullSync {
+		s.state.LastPush = time.Now()
+		s.state.LastSync = time.Now()
+	}
 	if err := s.state.Save(); err != nil {
 		return result, fmt.Errorf("failed to save state: %w", err)
 	}

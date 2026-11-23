@@ -1012,12 +1012,29 @@ func runWebDAVWizard(webdavURL, username, password, pathPrefix string) (*storage
 
 func pushCmd() *cobra.Command {
 	var includeMCP bool
+	var sessions []string
 
 	cmd := &cobra.Command{
 		Use:   "push",
 		Short: "Upload local changes to cloud storage",
-		Long:  `Encrypt and upload changed files from ~/.claude to cloud storage.`,
+		Long: `Encrypt and upload changed files from ~/.claude to cloud storage.
+
+With --session, only the files of the given session(s) are pushed: the
+transcript projects/<project>/<id>.jsonl, its projects/<project>/<id>/
+directory (subagents, tool results) and tasks/<id>/. A unique prefix of the
+session ID is enough. Nothing outside those sessions is uploaded or deleted,
+and history.jsonl and MCP configs are not pushed; on the other device, run
+'claude-sync pull --rebuild-history' so the session shows up in /resume.
+
+Examples:
+  claude-sync push                                # Push all changes
+  claude-sync push --session 5d67ed06             # Push one session by prefix
+  claude-sync push --session abc123 --session def456`,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(sessions) > 0 && includeMCP {
+				return fmt.Errorf("--include-mcp cannot be combined with --session")
+			}
+
 			cfg, err := config.Load()
 			if err != nil {
 				return err
@@ -1026,6 +1043,21 @@ func pushCmd() *cobra.Command {
 			syncer, err := sync.NewSyncer(cfg, quiet)
 			if err != nil {
 				return err
+			}
+
+			var sessionRefs []*sync.SessionRef
+			if len(sessions) > 0 {
+				sessionRefs, err = syncer.ResolveSessions(sessions)
+				if err != nil {
+					return err
+				}
+				if !quiet {
+					for _, ref := range sessionRefs {
+						fmt.Printf("%s→%s Session %s%s%s (%s)\n",
+							colorCyan, colorReset, colorBold, ref.ID, colorReset,
+							strings.Join(ref.Projects, ", "))
+					}
+				}
 			}
 
 			if !quiet {
@@ -1067,7 +1099,12 @@ func pushCmd() *cobra.Command {
 			}
 
 			ctx := context.Background()
-			result, err := syncer.Push(ctx)
+			var result *sync.SyncResult
+			if len(sessionRefs) > 0 {
+				result, err = syncer.PushSessions(ctx, sessionRefs)
+			} else {
+				result, err = syncer.Push(ctx)
+			}
 			if err != nil {
 				return err
 			}
@@ -1102,8 +1139,8 @@ func pushCmd() *cobra.Command {
 				}
 			}
 
-			// MCP sync if enabled
-			if includeMCP || cfg.IsMCPSyncEnabled() {
+			// MCP sync if enabled (a session push is scoped to that session only)
+			if len(sessionRefs) == 0 && (includeMCP || cfg.IsMCPSyncEnabled()) {
 				if err := runMCPPush(ctx, syncer); err != nil {
 					return err
 				}
@@ -1114,6 +1151,7 @@ func pushCmd() *cobra.Command {
 	}
 
 	cmd.Flags().BoolVar(&includeMCP, "include-mcp", false, "Also sync MCP server configs from ~/.claude.json")
+	cmd.Flags().StringSliceVar(&sessions, "session", nil, "Push only this session (full ID or unique prefix); repeatable")
 	return cmd
 }
 

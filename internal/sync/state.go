@@ -312,6 +312,18 @@ type FileChange struct {
 }
 
 func (s *SyncState) DetectChanges(claudeDir string, syncPaths []string, excludeFn ...func(string) bool) ([]FileChange, error) {
+	return s.detectChanges(claudeDir, syncPaths, false, excludeFn...)
+}
+
+// DetectChangesWithin is DetectChanges for a partial sync: deletions are only
+// reported for previously synced files that live under syncPaths. Files known
+// to state outside that set are ignored rather than treated as deleted, so a
+// partial push can never remove unrelated remote objects.
+func (s *SyncState) DetectChangesWithin(claudeDir string, syncPaths []string, excludeFn ...func(string) bool) ([]FileChange, error) {
+	return s.detectChanges(claudeDir, syncPaths, true, excludeFn...)
+}
+
+func (s *SyncState) detectChanges(claudeDir string, syncPaths []string, scopeDeletes bool, excludeFn ...func(string) bool) ([]FileChange, error) {
 	var changes []FileChange
 
 	localFiles, err := GetLocalFiles(claudeDir, syncPaths, excludeFn...)
@@ -356,6 +368,9 @@ func (s *SyncState) DetectChanges(claudeDir string, syncPaths []string, excludeF
 	s.mu.Unlock()
 
 	for _, relPath := range knownPaths {
+		if scopeDeletes && !coveredBy(relPath, syncPaths) {
+			continue
+		}
 		if _, exists := localFiles[relPath]; !exists {
 			changes = append(changes, FileChange{
 				Path:   relPath,
